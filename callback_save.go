@@ -65,6 +65,8 @@ func saveAssociationCheck(scope *Scope, field *Field) (autoUpdate bool, autoCrea
 }
 
 func saveBeforeAssociationsCallback(scope *Scope) {
+	//检查每个field是否需要自动更新、自动创建等
+	//针对关系是belongs_to的进行预处理
 	for _, field := range scope.Fields() {
 		autoUpdate, autoCreate, saveReference, relationship := saveAssociationCheck(scope, field)
 
@@ -144,6 +146,7 @@ func saveAfterAssociationsCallback(scope *Scope) {
 
 				if saveReference {
 					if len(relationship.ForeignFieldNames) != 0 {
+						//如果有外键，则获取其外键关联，并在主体结构体(User)下获取其外键关联的Field的值
 						for idx, fieldName := range relationship.ForeignFieldNames {
 							associationForeignName := relationship.AssociationForeignDBNames[idx]
 							if f, ok := scope.FieldByName(associationForeignName); ok {

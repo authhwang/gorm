@@ -357,6 +357,7 @@ func (s *DB) Preloads(out interface{}) *DB {
 }
 
 // Scan scan value to a struct
+//将数据注入结构体中
 func (s *DB) Scan(dest interface{}) *DB {
 	return s.NewScope(s.Value).Set("gorm:query_destination", dest).callCallbacks(s.parent.callbacks.queries).db
 }
@@ -531,6 +532,7 @@ func (s *DB) Begin() *DB {
 }
 
 // BeginTx begins a transaction with options
+// 启用官方包的transaction功能
 func (s *DB) BeginTx(ctx context.Context, opts *sql.TxOptions) *DB {
 	c := s.clone()
 	if db, ok := c.db.(sqlDb); ok && db != nil {

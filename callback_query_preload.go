@@ -32,7 +32,25 @@ func preloadCallback(scope *Scope) {
 		preloadedMap = map[string]bool{}
 		fields       = scope.Fields()
 	)
+	/*
+	db.Preload("Orders").Find(&users)
+	//// SELECT * FROM users;
+	//// SELECT * FROM orders WHERE user_id IN (1,2,3,4);
 
+	db.Preload("Orders", "state NOT IN (?)", "cancelled").Find(&users)
+	//// SELECT * FROM users;
+	//// SELECT * FROM orders WHERE user_id IN (1,2,3,4) AND state NOT IN ('cancelled');
+
+	db.Where("state = ?", "active").Preload("Orders", "state NOT IN (?)", "cancelled").Find(&users)
+	//// SELECT * FROM users WHERE state = 'active';
+	//// SELECT * FROM orders WHERE user_id IN (1,2) AND state NOT IN ('cancelled');
+
+	db.Preload("Orders").Preload("Profile").Preload("Role").Find(&users)
+	//// SELECT * FROM users;
+	//// SELECT * FROM orders WHERE user_id IN (1,2,3,4); // has many
+	//// SELECT * FROM profiles WHERE user_id IN (1,2,3,4); // has one
+	//// SELECT * FROM roles WHERE id IN (4,5,6); // belongs to
+	*/
 	for _, preload := range scope.Search.preload {
 		var (
 			preloadFields = strings.Split(preload.schema, ".")
@@ -94,6 +112,7 @@ func preloadCallback(scope *Scope) {
 	}
 }
 
+//针对有结构体字段上注明需要Preload的字段，有则注入search.preload切片中
 func autoPreload(scope *Scope) {
 	for _, field := range scope.Fields() {
 		if field.Relationship == nil {
@@ -120,9 +139,11 @@ func (scope *Scope) generatePreloadDBWithConditions(conditions []interface{}) (*
 	)
 
 	for _, condition := range conditions {
+		//如果是自定义preload方法
 		if scopes, ok := condition.(func(*DB) *DB); ok {
 			preloadDB = scopes(preloadDB)
 		} else {
+			//其他string类型的
 			preloadConditions = append(preloadConditions, condition)
 		}
 	}
@@ -131,6 +152,7 @@ func (scope *Scope) generatePreloadDBWithConditions(conditions []interface{}) (*
 }
 
 // handleHasOnePreload used to preload has one associations
+// 先获取hasOne关系下的外键关联，并获取其值，然后链接condition，通过find进行查找，找到的值用slice保存，最后遍历slice，将每个值设置到对应字段中
 func (scope *Scope) handleHasOnePreload(field *Field, conditions []interface{}) {
 	relation := field.Relationship
 

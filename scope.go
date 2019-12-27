@@ -181,6 +181,7 @@ func (scope *Scope) PrimaryKey() string {
 }
 
 // PrimaryKeyZero check main primary field's value is blank or not
+//查看该scope对象是否含有主键
 func (scope *Scope) PrimaryKeyZero() bool {
 	field := scope.PrimaryField()
 	return field == nil || field.IsBlank
@@ -254,6 +255,7 @@ func (scope *Scope) CallMethod(methodName string) {
 }
 
 // AddToVars add value as sql's vars, used to prevent SQL injection
+//将所有传入sql的值检查并存入SQLVar
 func (scope *Scope) AddToVars(value interface{}) string {
 	_, skipBindVar := scope.InstanceGet("skip_bindvar")
 
@@ -404,6 +406,7 @@ func (scope *Scope) Begin() *Scope {
 	if db, ok := scope.SQLDB().(sqlDb); ok {
 		if tx, err := db.Begin(); scope.Err(err) == nil {
 			scope.db.db = interface{}(tx).(SQLCommon)
+			//保存现在scope所处状态gorm:started_transaction
 			scope.InstanceSet("gorm:started_transaction", true)
 		}
 	}
@@ -473,6 +476,7 @@ func (scope *Scope) quoteIfPossible(str string) string {
 	return str
 }
 
+//scan 将每行的数据映射到结构体中
 func (scope *Scope) scan(rows *sql.Rows, columns []string, fields []*Field) {
 	var (
 		ignored            interface{}
@@ -497,6 +501,7 @@ func (scope *Scope) scan(rows *sql.Rows, columns []string, fields []*Field) {
 				if field.Field.Kind() == reflect.Ptr {
 					values[index] = field.Field.Addr().Interface()
 				} else {
+					//获取结构体fieldIndex属性的零值指针，然后给该指针设置地址
 					reflectValue := reflect.New(reflect.PtrTo(field.Struct.Type))
 					reflectValue.Elem().Set(field.Field.Addr())
 					values[index] = reflectValue.Interface()
@@ -515,6 +520,7 @@ func (scope *Scope) scan(rows *sql.Rows, columns []string, fields []*Field) {
 	scope.Err(rows.Scan(values...))
 
 	for index, field := range resetFields {
+		//二级指针
 		if v := reflect.ValueOf(values[index]).Elem().Elem(); v.IsValid() {
 			field.Field.Set(v)
 		}
@@ -563,6 +569,7 @@ func (scope *Scope) buildCondition(clause map[string]interface{}, include bool) 
 					str = fmt.Sprintf("(%v.%v NOT IN (?))", quotedTableName, scope.Quote(value))
 				}
 			} else {
+				//适用joins
 				str = fmt.Sprintf("(%v)", value)
 			}
 		}
@@ -666,6 +673,15 @@ func (scope *Scope) buildCondition(clause map[string]interface{}, include bool) 
 }
 
 func (scope *Scope) buildSelectQuery(clause map[string]interface{}) (str string) {
+	/*
+	db.Select("name, age").Find(&users)
+	//// SELECT name, age FROM users;
+
+	db.Select([]string{"name", "age"}).Find(&users)
+	//// SELECT name, age FROM users;
+
+	db.Table("users").Select("COALESCE(age,?)", 42).Rows()
+	*/
 	switch value := clause["query"].(type) {
 	case string:
 		str = value
@@ -829,6 +845,17 @@ func (scope *Scope) havingSQL() string {
 
 func (scope *Scope) joinsSQL() string {
 	var joinConditions []string
+	/*
+	rows, err := db.Table("users").Select("users.name, emails.email").Joins("left join emails on emails.user_id = users.id").Rows()
+	for rows.Next() {
+		...
+	}
+
+	db.Table("users").Select("users.name, emails.email").Joins("left join emails on emails.user_id = users.id").Scan(&results)
+
+	// 多个连接与参数
+	db.Joins("JOIN emails ON emails.user_id = users.id AND emails.email = ?", "jinzhu@example.org").Joins("JOIN credit_cards ON credit_cards.user_id = users.id").Where("credit_cards.number = ?", "411111111111").Find(&user)
+	*/
 	for _, clause := range scope.Search.joinConditions {
 		if sql := scope.buildCondition(clause, true); sql != "" {
 			joinConditions = append(joinConditions, strings.TrimSuffix(strings.TrimPrefix(sql, "("), ")"))
@@ -1256,8 +1283,11 @@ func (scope *Scope) removeIndex(indexName string) {
 }
 
 func (scope *Scope) autoMigrate() *Scope {
-	tableName := scope.TableName()
-	quotedTableName := scope.QuotedTableName()
+	//先将结构体内的内容整理一遍，然后通过dialect去检查
+	//查找是否有该table，若有检查每一个行，若没有则增加，然后检查是否有外键、外键关联的关系，有创建对应的关系并检查对应的表结构，最后检查所有idnex
+	//若没有该table，创建生成table的sql语句，后面就跟上述的相似
+	tableName := scope.TableName() //users
+	quotedTableName := scope.QuotedTableName() //`users`
 
 	if !scope.Dialect().HasTable(tableName) {
 		scope.createTable()

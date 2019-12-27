@@ -7,6 +7,14 @@ import (
 )
 
 // Define callbacks for querying
+/*
+1.只处理不属于preload的模型(不含有relationship的)，将所有前面注入在serach属性中的值以不同类型下作出不同处理，并转成sql所需的string(详细转换看scope.go)。然后遍历所有行，把每个field都设置到结构体变量中。
+2.preload的作用是将有些有relationship的模型一并查找，默认开启的。会遍历所有field，找到有需要preload或者有relationship的field进行往下查找，会根据关系先获取特定的键，然后连接condition，通过find查找，查找成功后则作为值设置到对应的field上。
+3.调用每个模型下的自定义生命周期方法AfterFind
+
+*/
+
+
 func init() {
 	DefaultCallback.Query().Register("gorm:query", queryCallback)
 	DefaultCallback.Query().Register("gorm:preload", preloadCallback)

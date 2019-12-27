@@ -152,6 +152,7 @@ func getForeignField(column string, fields []*StructField) *StructField {
 
 // GetModelStruct get value's model struct, relationships based on struct and tag definition
 func (scope *Scope) GetModelStruct() *ModelStruct {
+	//结构传入的结构体，并存入sync.map类型的modelStructsMap
 	var modelStruct ModelStruct
 	// Scope value can't be nil
 	if scope.Value == nil {
@@ -252,6 +253,20 @@ func (scope *Scope) GetModelStruct() *ModelStruct {
 							}
 						}
 
+
+						//属于back-reference
+						/*
+							type User struct {
+								gorm.Model
+								Languages         []*Language `gorm:"many2many:user_languages;"`
+							}
+
+							type Language struct {
+								gorm.Model
+								Name string
+								Users         	  []*User     `gorm:"many2many:user_languages;"`
+							}
+						*/
 						if subField.Relationship != nil && subField.Relationship.JoinTableHandler != nil {
 							if joinTableHandler, ok := subField.Relationship.JoinTableHandler.(*JoinTableHandler); ok {
 								newJoinTableHandler := &JoinTableHandler{}
@@ -291,17 +306,42 @@ func (scope *Scope) GetModelStruct() *ModelStruct {
 							}
 
 							if elemType.Kind() == reflect.Struct {
+								
 								if many2many, _ := field.TagSettingsGet("MANY2MANY"); many2many != "" {
+								/*
+									type User struct {
+										gorm.Model
+										Languages         []Language `gorm:"many2many:user_languages;"`
+									}
+
+									type Language struct {
+										gorm.Model
+										Name string
+									}
+								*/
 									relationship.Kind = "many_to_many"
 
 									{ // Foreign Keys for Source
 										joinTableDBNames := []string{}
 
+										// 寻找是否有Jointable_foreign_keys
+										/*
+											type CustomizePerson struct {
+												IdPerson string             `gorm:"primary_key:true"`
+												Accounts []CustomizeAccount `gorm:"many2many:PersonAccount;foreignkey:idPerson;association_foreignkey:idAccount;association_jointable_foreignkey:account_id;jointable_foreignkey:person_id;"`
+											}
+
+											type CustomizeAccount struct {
+												IdAccount string `gorm:"primary_key:true"`
+												Name      string
+											}
+										*/
 										if foreignKey, _ := field.TagSettingsGet("JOINTABLE_FOREIGNKEY"); foreignKey != "" {
 											joinTableDBNames = strings.Split(foreignKey, ",")
 										}
 
 										// if no foreign keys defined with tag
+										// 如果不存在外键，则通过寻找User的主键作为Language的外键
 										if len(foreignKeys) == 0 {
 											for _, field := range modelStruct.PrimaryFields {
 												foreignKeys = append(foreignKeys, field.DBName)
@@ -309,6 +349,7 @@ func (scope *Scope) GetModelStruct() *ModelStruct {
 										}
 
 										for idx, foreignKey := range foreignKeys {
+											//遍历所有外键并在User中寻找对应Field
 											if foreignField := getForeignField(foreignKey, modelStruct.StructFields); foreignField != nil {
 												// source foreign keys (db names)
 												relationship.ForeignFieldNames = append(relationship.ForeignFieldNames, foreignField.DBName)
@@ -316,8 +357,10 @@ func (scope *Scope) GetModelStruct() *ModelStruct {
 												// setup join table foreign keys for source
 												if len(joinTableDBNames) > idx {
 													// if defined join table's foreign key
+													//如果jointable_foreign_key比外键多 则使用jointable_foreign_key作为ForeignDBNames
 													relationship.ForeignDBNames = append(relationship.ForeignDBNames, joinTableDBNames[idx])
 												} else {
+													//jointable_foreign_key比外键少，则使用User_id的方式作为默认ForeignDBNames
 													defaultJointableForeignKey := ToColumnName(reflectType.Name()) + "_" + foreignField.DBName
 													relationship.ForeignDBNames = append(relationship.ForeignDBNames, defaultJointableForeignKey)
 												}
@@ -327,28 +370,33 @@ func (scope *Scope) GetModelStruct() *ModelStruct {
 
 									{ // Foreign Keys for Association (Destination)
 										associationJoinTableDBNames := []string{}
-
+										//上面例子也包含
 										if foreignKey, _ := field.TagSettingsGet("ASSOCIATION_JOINTABLE_FOREIGNKEY"); foreignKey != "" {
 											associationJoinTableDBNames = strings.Split(foreignKey, ",")
 										}
 
 										// if no association foreign keys defined with tag
 										if len(associationForeignKeys) == 0 {
+											//不含有指定的外键关联时，则寻找Language的主键作为外键关联
 											for _, field := range toScope.PrimaryFields() {
 												associationForeignKeys = append(associationForeignKeys, field.DBName)
 											}
 										}
 
+										
 										for idx, name := range associationForeignKeys {
+											//遍历所有外键关联并在Language中寻找对应Field
 											if field, ok := toScope.FieldByName(name); ok {
 												// association foreign keys (db names)
 												relationship.AssociationForeignFieldNames = append(relationship.AssociationForeignFieldNames, field.DBName)
 
 												// setup join table foreign keys for association
 												if len(associationJoinTableDBNames) > idx {
+													//如果assocation_jointable_foreign_key比外键关联多 则使用assocation_jointable_foreign_key作为AssocationForeignDBNames
 													relationship.AssociationForeignDBNames = append(relationship.AssociationForeignDBNames, associationJoinTableDBNames[idx])
 												} else {
 													// join table foreign keys for association
+													//如果assocation_jointable_foreign_key比外键关联少 则使用Language_id作为AssocationForeignDBNames
 													joinTableDBName := ToColumnName(elemType.Name()) + "_" + field.DBName
 													relationship.AssociationForeignDBNames = append(relationship.AssociationForeignDBNames, joinTableDBName)
 												}
@@ -357,15 +405,30 @@ func (scope *Scope) GetModelStruct() *ModelStruct {
 									}
 
 									joinTableHandler := JoinTableHandler{}
+									//配置srouceType,destinationType,many2many的tableName,relationship到joinTableHandler
 									joinTableHandler.Setup(relationship, many2many, reflectType, elemType)
 									relationship.JoinTableHandler = &joinTableHandler
 									field.Relationship = relationship
 								} else {
 									// User has many comments, associationType is User, comment use UserID as foreign key
+									/*
+										type User struct {
+											gorm.Model
+											CreditCards []CreditCard
+										}
+
+										type CreditCard struct {
+											gorm.Model
+											Number   string
+											UserID  uint
+										}
+									
+									*/
 									var associationType = reflectType.Name()
 									var toFields = toScope.GetStructFields()
 									relationship.Kind = "has_many"
 
+									//polymorphic 既然一种抽象化也是一种封装
 									if polymorphic, _ := field.TagSettingsGet("POLYMORPHIC"); polymorphic != "" {
 										// Dog has many toys, tag polymorphic is Owner, then associationType is Owner
 										// Toy use OwnerID, OwnerType ('dogs') as foreign key
@@ -386,6 +449,8 @@ func (scope *Scope) GetModelStruct() *ModelStruct {
 									// if no foreign keys defined with tag
 									if len(foreignKeys) == 0 {
 										// if no association foreign keys defined with tag
+										////当外键和外键关联都没有时，就会拿assciationType + 主键名作为外键使用
+										// associationType = User, UserId作为CreditCard的外键，id作为外键关联
 										if len(associationForeignKeys) == 0 {
 											for _, field := range modelStruct.PrimaryFields {
 												foreignKeys = append(foreignKeys, associationType+field.Name)
@@ -393,6 +458,8 @@ func (scope *Scope) GetModelStruct() *ModelStruct {
 											}
 										} else {
 											// generate foreign keys from defined association foreign keys
+											////当外键没有但外键关联有时，就会遍历外键关联并在User中找到对应的Field
+											// associationType = User, UserId作为CreditCard的外键，foreignField.Name（User.id）作为外键关联
 											for _, scopeFieldName := range associationForeignKeys {
 												if foreignField := getForeignField(scopeFieldName, modelStruct.StructFields); foreignField != nil {
 													foreignKeys = append(foreignKeys, associationType+foreignField.Name)
@@ -402,6 +469,7 @@ func (scope *Scope) GetModelStruct() *ModelStruct {
 										}
 									} else {
 										// generate association foreign keys from foreign keys
+										////当外键有但外键关联没有时，就会遍历外键，符合前缀是User的foreignKey，并在User中找到对应的Field
 										if len(associationForeignKeys) == 0 {
 											for _, foreignKey := range foreignKeys {
 												if strings.HasPrefix(foreignKey, associationType) {
@@ -421,6 +489,7 @@ func (scope *Scope) GetModelStruct() *ModelStruct {
 									}
 
 									for idx, foreignKey := range foreignKeys {
+										//遍历所有外键，先从CreditCard中寻找对应的Field，以同索引的方式在User中寻找对应的Field
 										if foreignField := getForeignField(foreignKey, toFields); foreignField != nil {
 											if associationField := getForeignField(associationForeignKeys[idx], modelStruct.StructFields); associationField != nil {
 												// mark field as foreignkey, use global lock to avoid race
@@ -450,6 +519,7 @@ func (scope *Scope) GetModelStruct() *ModelStruct {
 					case reflect.Struct:
 						defer func(field *StructField) {
 							var (
+								//外键关联assocatin foreign key 属于当不用默认外键时
 								// user has one profile, associationType is User, profile use UserID as foreign key
 								// user belongs to profile, associationType is Profile, user use ProfileID as foreign key
 								associationType           = reflectType.Name()
@@ -494,6 +564,8 @@ func (scope *Scope) GetModelStruct() *ModelStruct {
 								// if no foreign keys defined with tag
 								if len(foreignKeys) == 0 {
 									// if no association foreign keys defined with tag
+									//当外键和外键关联都没有时，就会拿assciationType + 主键名作为外键使用
+									//User has one profile = User struct has profile struct. then associationType = user And Profiles's foreignKey & User's associationForeignKeys is UserID 
 									if len(associationForeignKeys) == 0 {
 										for _, primaryField := range modelStruct.PrimaryFields {
 											foreignKeys = append(foreignKeys, associationType+primaryField.Name)
@@ -501,6 +573,21 @@ func (scope *Scope) GetModelStruct() *ModelStruct {
 										}
 									} else {
 										// generate foreign keys form association foreign keys
+										//当没有外键但有外键关联时, 就会通过User struct本身的属性寻找外键关联
+										//User has one profile = User struct has profile struct. then associationType = user And Profiles's foreignKey is UserName & User's associationForeignKeys is Name
+										/*
+											type CreditCard struct {
+  												gorm.Model
+  												Number string
+  												UID    string
+											}
+
+											type User struct {
+												gorm.Model
+												Name       `sql:"index"`
+												CreditCard CreditCard `gorm:"foreignkey:uid;association_foreignkey:name"`
+											}
+										*/
 										for _, associationForeignKey := range tagAssociationForeignKeys {
 											if foreignField := getForeignField(associationForeignKey, modelStruct.StructFields); foreignField != nil {
 												foreignKeys = append(foreignKeys, associationType+foreignField.Name)
@@ -510,6 +597,21 @@ func (scope *Scope) GetModelStruct() *ModelStruct {
 									}
 								} else {
 									// generate association foreign keys from foreign keys
+
+									//当只有外键但没有外键关联时, 就会通过User struct本身的属性寻找外键关联
+									//User has one profile = User struct has profile struct. then associationType = user And Profiles's foreignKey is UserName & User's associationForeignKeys is Name
+									/*
+										type CreditCard struct {
+  											gorm.Model
+  											Number   string
+  											UserName string
+										}
+
+										type User struct {
+  											gorm.Model
+  											CreditCard CreditCard `gorm:"foreignkey:UserName"`
+										}
+									*/
 									if len(associationForeignKeys) == 0 {
 										for _, foreignKey := range foreignKeys {
 											if strings.HasPrefix(foreignKey, associationType) {
@@ -519,6 +621,8 @@ func (scope *Scope) GetModelStruct() *ModelStruct {
 												}
 											}
 										}
+
+										//如果遍历后都没有assocation foreign keys时，则用主键作为外键关联
 										if len(associationForeignKeys) == 0 && len(foreignKeys) == 1 {
 											associationForeignKeys = []string{scope.PrimaryKey()}
 										}
@@ -529,8 +633,21 @@ func (scope *Scope) GetModelStruct() *ModelStruct {
 								}
 
 								for idx, foreignKey := range foreignKeys {
+									//遍历寻找在Profiles struct中是否含有这些外键，如果没有则属于belongs to 例如
+									/*
+										type Profile struct {
+  											gorm.Model
+  											UserID int
+  											User   User
+  											Name   string
+										}
+										这种情况下就算有一个替补主键ProfileId，但User不含有该键，所以不属于has one
+
+									*/
 									if foreignField := getForeignField(foreignKey, toFields); foreignField != nil {
+										//检查外键是否存在Profile
 										if scopeField := getForeignField(associationForeignKeys[idx], modelStruct.StructFields); scopeField != nil {
+											//检查外键关联是否存在于User
 											// mark field as foreignkey, use global lock to avoid race
 											structsLock.Lock()
 											foreignField.IsForeignKey = true
@@ -549,6 +666,7 @@ func (scope *Scope) GetModelStruct() *ModelStruct {
 							}
 
 							if len(relationship.ForeignFieldNames) != 0 {
+								//所拥有的Profile于User而言是has_one关系
 								relationship.Kind = "has_one"
 								field.Relationship = relationship
 							} else {
@@ -558,12 +676,31 @@ func (scope *Scope) GetModelStruct() *ModelStruct {
 								if len(foreignKeys) == 0 {
 									// generate foreign keys & association foreign keys
 									if len(associationForeignKeys) == 0 {
+										//当外键和外键关联都没有时，只能拿User + 主键名作为外键使用
+										//Profile belongs to User = Profile struct has user struct. then field.Name = User And Profiles's foreignKey = UserId & User's associationForeignKeys = UserID 
+
 										for _, primaryField := range toScope.PrimaryFields() {
 											foreignKeys = append(foreignKeys, field.Name+primaryField.Name)
 											associationForeignKeys = append(associationForeignKeys, primaryField.Name)
 										}
 									} else {
 										// generate foreign keys with association foreign keys
+										//当外键没有但外键关联都有时，就通过User的属性与外键关联对比，寻找外键
+										//Profile belongs to User = Profile struct has user struct. then field.Name = User And Profiles's foreignKey = UserName & User's associationForeignKeys = Name
+										/*
+											type User struct {
+ 												gorm.Model
+  												Refer string
+ 												Name string
+											}
+
+											type Profile struct {
+  												gorm.Model
+  												Name      string
+  												User      User `gorm:"association_foreignkey:Refer"` // use Refer as association foreign key
+  												UserRefer string
+											}
+										*/ 
 										for _, associationForeignKey := range associationForeignKeys {
 											if foreignField := getForeignField(associationForeignKey, toFields); foreignField != nil {
 												foreignKeys = append(foreignKeys, field.Name+foreignField.Name)
@@ -573,6 +710,21 @@ func (scope *Scope) GetModelStruct() *ModelStruct {
 									}
 								} else {
 									// generate foreign keys & association foreign keys
+									//当外键有但外键关联没有时，就通过遍历外键，找到以User为前缀的属性，剔除前缀并在User中查找外键关联
+									//Profile belongs to User = Profile struct has user struct. then field.Name = User And Profiles's foreignKey = UserName & User's associationForeignKeys = Name
+									/*
+									type User struct {
+  										gorm.Model
+  										Name string
+									}
+
+									type Profile struct {
+  										gorm.Model
+ 										Name      string
+ 										User      User `gorm:"foreignkey:UserRefer"` // use UserRefer as foreign key
+  										UserRefer uint
+									}
+									*/
 									if len(associationForeignKeys) == 0 {
 										for _, foreignKey := range foreignKeys {
 											if strings.HasPrefix(foreignKey, field.Name) {
@@ -593,7 +745,9 @@ func (scope *Scope) GetModelStruct() *ModelStruct {
 
 								for idx, foreignKey := range foreignKeys {
 									if foreignField := getForeignField(foreignKey, modelStruct.StructFields); foreignField != nil {
+										//检查外键是否存在Profile本身
 										if associationField := getForeignField(associationForeignKeys[idx], toFields); associationField != nil {
+											//检查外键关联是否1比1地存在User
 											// mark field as foreignkey, use global lock to avoid race
 											structsLock.Lock()
 											foreignField.IsForeignKey = true
@@ -633,6 +787,7 @@ func (scope *Scope) GetModelStruct() *ModelStruct {
 		}
 	}
 
+	//查找是否小写id
 	if len(modelStruct.PrimaryFields) == 0 {
 		if field := getForeignField("id", modelStruct.StructFields); field != nil {
 			field.IsPrimaryKey = true

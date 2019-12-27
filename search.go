@@ -72,6 +72,7 @@ func (s *search) Order(value interface{}, reorder ...bool) *search {
 	return s
 }
 
+//指定哪里字段需要被查找
 func (s *search) Select(query interface{}, args ...interface{}) *search {
 	s.selects = map[string]interface{}{"query": query, "args": args}
 	return s
@@ -113,7 +114,9 @@ func (s *search) Joins(query string, values ...interface{}) *search {
 
 func (s *search) Preload(schema string, values ...interface{}) *search {
 	var preloads []searchPreload
+	//遍历现有的search.preload
 	for _, preload := range s.preload {
+		//如果不等于schema的，添加到searchPerload切片中
 		if preload.schema != schema {
 			preloads = append(preloads, preload)
 		}

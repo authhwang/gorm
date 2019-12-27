@@ -6,6 +6,18 @@ import (
 )
 
 // Define callbacks for creating
+// 针对简单的Create，遍历Craetes数组里面的方法
+/*
+	1.创建sql包的transaction
+	2.调用每个模型下的自定义生命周期方法BeforeSave, BeforeCreate(将结构体转为reflect.Value类型，调用MethodByName方法获取methodValue,然后用methodValue.Interface().(type)获取其方法传入参数和返回值进行不同方法类型调用)
+	3.检查是否有是属于BelongsTo关系的模型，有则先预插入保存处理
+	4.更新Created_at 和 updated_at时间戳
+	5.遍历所有field，获取所有变量值，合成insert sql语句，执行sql包的exec
+	6.检查是否有属于hasOne、hasMany、manyToMany的关系，进行保存处理
+	7.调用每个模型下的自定义生命周期方法AfterSave, AfterCreate
+	8.查看是否有错误产生，有则调用rollback，无则commit
+*/
+
 func init() {
 	DefaultCallback.Create().Register("gorm:begin_transaction", beginTransactionCallback)
 	DefaultCallback.Create().Register("gorm:before_create", beforeCreateCallback)
@@ -57,6 +69,8 @@ func createCallback(scope *Scope) {
 			blankColumnsWithDefaultValue []string
 		)
 
+		//遍历所有fields，查看有多少需要传入的列
+		//callback_create.go createCallback() columns & placeholoder ==  [`created_at` `updated_at` `deleted_at` `name`] [$$$ $$$ $$$ $$$]
 		for _, field := range scope.Fields() {
 			if scope.changeableField(field) {
 				if field.IsNormal && !field.IsIgnored {
@@ -132,6 +146,7 @@ func createCallback(scope *Scope) {
 				scope.db.RowsAffected, _ = result.RowsAffected()
 
 				// set primary value to primary field
+				//设置主键值
 				if primaryField != nil && primaryField.IsBlank {
 					if primaryValue, err := result.LastInsertId(); scope.Err(err) == nil {
 						scope.Err(primaryField.Set(primaryValue))
@@ -176,9 +191,11 @@ func forceReloadAfterCreateCallback(scope *Scope) {
 		db := scope.DB().New().Table(scope.TableName()).Select(blankColumnsWithDefaultValue.([]string))
 		for _, field := range scope.Fields() {
 			if field.IsPrimaryKey && !field.IsBlank {
+				//查找其他不为空字段，并用where user =  1这样的方式保存
 				db = db.Where(fmt.Sprintf("%v = ?", field.DBName), field.Field.Interface())
 			}
 		}
+		//将通过sql语句查找的其他默认都注入到结构体变量中
 		db.Scan(scope.Value)
 	}
 }
